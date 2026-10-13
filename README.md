@@ -1,6 +1,7 @@
 
 # IDOR Security Lab
 [![API Security Tests](https://github.com/bymelwine/idor-security-lab/actions/workflows/security-tests.yml/badge.svg?branch=main)](https://github.com/bymelwine/idor-security-lab/actions/workflows/security-tests.yml)
+
 A hands-on cybersecurity project demonstrating how Insecure Direct Object Reference (IDOR) vulnerabilities occur in REST APIs, how they can be identified, and how to remediate them using server-side authorization controls.
 
 Built with Python, FastAPI, and Pytest.
