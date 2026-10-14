@@ -15,11 +15,13 @@ Built with **Python, FastAPI, Argon2, and Pytest**.
 - Reproduce unauthorized resource access in a controlled local environment.
 - Identify insecure object references in REST APIs.
 - Implement server-side object-level authorization.
-- Introduce secure password hashing using Argon2.
+- Introduce password hashing using Argon2.
 - Implement token-based authentication and session expiration.
 - Prevent identity spoofing through untrusted HTTP headers.
 - Automate security regression tests using Pytest.
 - Integrate continuous security testing with GitHub Actions.
+
+---
 
 ## Technologies
 
@@ -52,24 +54,36 @@ Each document was intended to be accessible only to its owner.
 
 ### Vulnerable Implementation
 
-The original endpoint retrieved documents without validating ownership.
+The following simplified example illustrates the original authorization flaw. The application retrieved documents without verifying whether the requesting user was authorized to access them.
 
 ```python
 @app.get("/documents/{document_id}")
 def get_document(document_id: int):
+
     document = documents.get(document_id)
 
     if document is None:
-        raise HTTPException(status_code=404)
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found"
+        )
 
     return document
 ```
 
-The server retrieved the requested document without checking whether the requester was authorized to access it.
+The server retrieves the requested document without checking its ownership.
+
+The initial laboratory implementation also used a client-controlled HTTP header to simulate user identity.
+
+**Security issue:** Missing Object-Level Authorization.
+
+The vulnerable behavior was demonstrated locally before the application was secured.
+
+The published `main.py` contains the secured version.
 
 ### IDOR Exploitation
 
-In the initial laboratory implementation, identity was simulated using an HTTP header.
+In the initial laboratory implementation, identity was simulated using the `X-Demo-User` HTTP header.
 
 Example request:
 
@@ -79,7 +93,7 @@ Host: 127.0.0.1:8000
 X-Demo-User: alice
 ```
 
-The server returned:
+The application returned:
 
 ```json
 {
@@ -96,13 +110,15 @@ The server returned:
 
 Alice was able to retrieve Bob's private document.
 
-This demonstrated missing object-level authorization.
+This demonstrated a missing object-level authorization check.
 
 The original `X-Demo-User` header was also untrusted because clients could freely modify it.
 
 ### Root Cause
 
-The application performed a database lookup using a user-controlled document identifier without enforcing object-level authorization.
+The application performed an in-memory document lookup using a client-controlled document identifier without enforcing object-level authorization.
+
+The backend did not verify whether the requester was the legitimate owner of the requested document.
 
 **Security principle:** Authentication alone does not grant access to every resource.
 
@@ -135,14 +151,14 @@ flowchart TD
 ### Request Processing
 
 1. The client sends an HTTP request with a Bearer token.
-2. FastAPI validates the session token.
-3. The server checks whether the session has expired.
+2. FastAPI checks the session token.
+3. The server verifies whether the session has expired.
 4. The application identifies the authenticated user.
-5. The server retrieves the requested document.
+5. The server retrieves the requested document from an in-memory dictionary.
 6. Object-level authorization verifies document ownership.
 7. Access is granted or denied.
 
-The client cannot gain document access merely by changing a document identifier.
+Changing a document identifier alone must not allow unauthorized access.
 
 ---
 
@@ -157,7 +173,9 @@ from pwdlib import PasswordHash
 
 password_hash = PasswordHash.recommended()
 
-hashed_password = password_hash.hash("DemoPassword123!")
+hashed_password = password_hash.hash(
+    "DemoPassword123!"
+)
 
 is_valid = password_hash.verify(
     "DemoPassword123!",
@@ -165,11 +183,15 @@ is_valid = password_hash.verify(
 )
 ```
 
-Passwords are verified against their hashes rather than compared directly with stored plaintext passwords.
+The application verifies passwords against their hashes.
+
+For this educational demonstration, fictional plaintext passwords are defined in the source code and hashed at application startup.
+
+Production systems should never hardcode real user passwords.
 
 ### 2. Token-Based Authentication
 
-Successful authentication generates a random session token.
+Successful authentication generates a cryptographically random session token.
 
 ```python
 import secrets
@@ -185,7 +207,9 @@ Protected requests use:
 Authorization: Bearer <access_token>
 ```
 
-The application uses opaque session tokens, not JWTs.
+The application uses opaque session tokens, not JSON Web Tokens (JWTs).
+
+The server maintains the association between each session token and its authenticated user.
 
 ### 3. Session Expiration
 
@@ -195,11 +219,15 @@ Sessions have a lifetime of 30 minutes.
 SESSION_DURATION = 1800
 ```
 
+Session expiration is checked using a server-side timestamp.
+
 Expired tokens are rejected, and the associated session is removed from memory when checked.
+
+This prevents the continued use of a token after its expiration time.
 
 ### 4. Object-Level Authorization
 
-The secured endpoint verifies document ownership before returning sensitive data.
+The secured endpoint verifies document ownership before returning private information.
 
 ```python
 if document["owner"] != current_user:
@@ -208,6 +236,8 @@ if document["owner"] != current_user:
         detail="Access denied"
     )
 ```
+
+If Alice attempts to access Bob's document, the server rejects the request.
 
 Unauthorized requests receive:
 
@@ -222,6 +252,8 @@ Content-Type: application/json
 }
 ```
 
+The protected document is not included in the response.
+
 ### 5. Identity Spoofing Prevention
 
 The secured application no longer trusts the `X-Demo-User` header as proof of identity.
@@ -229,6 +261,8 @@ The secured application no longer trusts the `X-Demo-User` header as proof of id
 Instead, the server determines the authenticated identity using a valid Bearer session.
 
 Adding an arbitrary identity header does not override the authenticated user.
+
+The authorization check relies on the identity associated with the server-side session.
 
 ---
 
@@ -257,6 +291,8 @@ py -m venv .venv
 ```powershell
 python -m pip install -r requirements.txt
 ```
+
+All Python dependencies required by the application and automated tests are listed in `requirements.txt`.
 
 ---
 
@@ -295,11 +331,15 @@ These credentials are public demonstration values and must never be used for rea
 
 ### Example Login
 
+Request:
+
 ```http
 POST /login HTTP/1.1
 Host: 127.0.0.1:8000
 Content-Type: application/json
 ```
+
+Request body:
 
 ```json
 {
@@ -312,7 +352,7 @@ A successful response contains a generated Bearer access token.
 
 Use that token with the Swagger **Authorize** feature to test protected endpoints.
 
-Never publish active session tokens in screenshots or documentation.
+Never publish active session tokens in screenshots, logs, or documentation.
 
 ---
 
@@ -345,7 +385,17 @@ python -m pytest -v
 
 These automated tests help detect changes that could reintroduce previously identified authentication or authorization issues.
 
-They verify several important security scenarios but do not constitute a complete application security audit.
+The test suite validates:
+
+- Legitimate resource access.
+- Unauthorized document access.
+- Authentication requirements.
+- Protection against client-controlled identity spoofing.
+- Invalid session token rejection.
+- Incorrect password rejection.
+- Expired session token rejection.
+
+These tests verify selected security properties but do not constitute a complete application security audit.
 
 ---
 
@@ -375,6 +425,7 @@ flowchart TD
     C --> D
     D --> E
     E --> F
+
     F -->|Yes| G
     F -->|No| H
 ```
@@ -391,7 +442,9 @@ The pipeline automatically:
 
 [View GitHub Actions](https://github.com/bymelwine/idor-security-lab/actions)
 
-The badge at the top of this README displays the latest CI status for the main branch.
+The badge at the top of this README displays the latest CI status for the `main` branch.
+
+GitHub Actions enables continuous verification of the implemented security regression tests.
 
 ---
 
@@ -412,8 +465,20 @@ Current limitations include:
 - Full security monitoring and audit logging are not implemented.
 - HTTPS is not configured for the local development server.
 - The current authorization model supports simple document ownership.
+- The application uses in-memory dictionaries rather than a production database.
 
-For production use, additional measures would be required, including persistent identity management, centralized authorization policies, secure secret management, rate limiting, monitoring, and comprehensive security testing.
+For production use, additional measures would be required, including:
+
+- Persistent identity management.
+- Secure credential storage.
+- Centralized authorization policies.
+- HTTPS and secure deployment configuration.
+- Rate limiting and brute-force protection.
+- Session revocation and lifecycle management.
+- Security monitoring and audit logging.
+- Comprehensive automated and manual security testing.
+
+The current implementation must not be deployed as a production service.
 
 ---
 
@@ -436,7 +501,7 @@ Secure APIs should:
 - Apply the principle of least privilege.
 - Reject unauthorized resource access.
 - Never rely on unpredictable identifiers as the only security mechanism.
-- Never trust client-controlled identity headers.
+- Never trust client-controlled identity headers as proof of authentication.
 - Test both authorized and unauthorized access scenarios.
 - Automate security regression testing.
 
